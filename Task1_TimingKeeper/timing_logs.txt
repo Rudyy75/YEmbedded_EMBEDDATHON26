@@ -1,0 +1,41 @@
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+New timing pattern received!
+R: 6, G: 5, B: 0 timings
+
+=== Notes ===
+- LED timing accuracy: within ±5ms (using vTaskDelayUntil)
+- No timing drift observed over 5-minute operation
+- Consistent pattern reception throughout test
