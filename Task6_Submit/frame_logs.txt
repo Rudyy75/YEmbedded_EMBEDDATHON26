@@ -1,0 +1,32 @@
+# Task 6 Frame Logs
+
+## Session Info
+- Date: 2026-01-11
+- Team ID: aniruddhyembedded
+- Reef ID: aniruddhyelluriyembedded
+
+## Topics Used
+- Sequencer Topic: aniruddhyembedded_aniruddhyelluriyembedded (TeamID_ReefID)
+- ACK Topic: aniruddhyelluriyembedded_aniruddhyembedded (ReefID_TeamID)
+
+## Expected Log Format
+```
+[Task 6] Sequencer initialized, waiting for frame 0...
+[Task 6] Frame 0 received (START marker)
+[Task 6] Frame 1 received, delay: 100 ms
+[OLED] Frame 1 displayed for 100 ms
+[MQTT] ACK sent for frame 1 at timestamp 12345
+[Task 6] Frame 2 received, delay: 100 ms
+[OLED] Frame 2 displayed for 100 ms
+[MQTT] ACK sent for frame 2 at timestamp 12445
+...
+[Task 6] Terminator received, looping back to frame 1...
+--- LOOP COMPLETED (1) ---
+--- LOOP COMPLETED (2) ---
+--- LOOP COMPLETED (3) ---
+```
+
+## Success Criteria
+- 3+ complete loops executed
+- No crashes or watchdog resets
+- Smooth playback with ±20ms timing accuracy
