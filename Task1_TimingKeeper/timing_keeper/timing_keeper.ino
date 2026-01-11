@@ -2,274 +2,216 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "config.h"
 
-// ============================================
-// CONFIGURATION - Task 3: Window Synchronizer
-// ============================================
-
-// WiFi
-#define WIFI_SSID "vivo V30 pro"
-#define WIFI_PASSWORD "micromax"
-
-// MQTT
-#define MQTT_BROKER "broker.mqttdashboard.com"
-#define MQTT_PORT 1883
-#define TEAM_ID "aniruddhyembedded"
-
-// Hardware Pins - YOUR CONFIG
-#define LED_RED 18      // Red LED
-#define LED_BLUE 19     // Blue LED - Window indicator
-#define LED_GREEN 23    // Green LED - Sync success
-#define BUTTON_PIN 4    // Push button
-
-// Topics
-#define WINDOW_TOPIC "lkjhgf_window"        // From Task 2
-#define RESPONSE_TOPIC "cagedmonkey/listener"
-
-// Common Anode = inverted logic (LOW=ON, HIGH=OFF)
-// Change to false if using common cathode
-#define COMMON_ANODE true
-
-#if COMMON_ANODE
-  #define LED_ON  LOW
-  #define LED_OFF HIGH
-#else
-  #define LED_ON  HIGH
-  #define LED_OFF LOW
-#endif
-
-// Timing
-#define DEBOUNCE_MS 20
+// RGB LED Pins (from config.h)
+#define LED_R LED_RED
+#define LED_G LED_GREEN
+#define LED_B LED_BLUE
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
-// State
-volatile bool windowOpen = false;
-volatile unsigned long windowOpenTime = 0;
-volatile bool buttonPressed = false;
-volatile unsigned long buttonPressTime = 0;
-int syncCount = 0;
+// Timing arrays for each color
+int redTimings[50];
+int greenTimings[50];
+int blueTimings[50];
+volatile int redCount = 0, greenCount = 0, blueCount = 0;
 
-// LED pulse
-unsigned long lastPulse = 0;
-bool pulseState = false;
+// Mutex for protecting shared timing data
+SemaphoreHandle_t timingMutex;
 
-// ============================================
-// LED Control
-// ============================================
-void setRGB(bool r, bool g, bool b) {
-  digitalWrite(LED_RED, r ? LED_ON : LED_OFF);
-  digitalWrite(LED_GREEN, g ? LED_ON : LED_OFF);
-  digitalWrite(LED_BLUE, b ? LED_ON : LED_OFF);
-}
+// Task handles
+TaskHandle_t redTask, greenTask, blueTask;
 
-// ============================================
-// Button ISR
-// ============================================
-void IRAM_ATTR buttonISR() {
-  static unsigned long lastPress = 0;
-  unsigned long now = millis();
-  if (now - lastPress > DEBOUNCE_MS) {
-    buttonPressTime = now;
-    buttonPressed = true;
-    lastPress = now;
-  }
-}
-
-// ============================================
-// MQTT Callback
-// ============================================
+// MQTT callback - runs when timing data arrives
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String msg = "";
-  for (unsigned int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
+  StaticJsonDocument<1024> doc;
+  DeserializationError err = deserializeJson(doc, payload, length);
   
-  Serial.printf("\n[RX] %s: %s\n", topic, msg.c_str());
-  
-  // Skip non-JSON messages (like the hidden message)
-  if (msg.indexOf("{") < 0) {
-    Serial.printf("[INFO] Non-JSON: %s\n", msg.c_str());
+  if (err) {
+    Serial.println("JSON parse error");
     return;
   }
   
-  StaticJsonDocument<512> doc;
-  DeserializationError error = deserializeJson(doc, payload, length);
-  
-  if (error) {
-    Serial.printf("[WARN] JSON error: %s\n", error.c_str());
-    return;
-  }
-  
-  // Check for window status
-  if (doc.containsKey("status")) {
-    const char* status = doc["status"];
+  // Take mutex before modifying shared data
+  if (xSemaphoreTake(timingMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
     
-    if (strcmp(status, "open") == 0) {
-      windowOpen = true;
-      windowOpenTime = millis();
-      buttonPressed = false;
-      
-      setRGB(false, false, true);  // BLUE ON
-      Serial.printf("[WINDOW] OPEN at %lu ms - PRESS BUTTON NOW!\n", windowOpenTime);
+    // Parse red array
+    JsonArray red = doc["red"];
+    redCount = 0;
+    for (int val : red) {
+      if (redCount < 50) redTimings[redCount++] = val;
     }
-    else if (strcmp(status, "closed") == 0) {
-      windowOpen = false;
-      setRGB(true, false, false);  // RED ON
-      Serial.printf("[WINDOW] CLOSED\n");
+    
+    // Parse green array
+    JsonArray green = doc["green"];
+    greenCount = 0;
+    for (int val : green) {
+      if (greenCount < 50) greenTimings[greenCount++] = val;
     }
-  }
-  
-  // Check for challenge code
-  if (doc.containsKey("hidden_message") || doc.containsKey("challenge") || 
-      doc.containsKey("target_image_url") || doc.containsKey("next")) {
-    Serial.println("\n***** CHALLENGE CODE RECEIVED! *****");
-    serializeJsonPretty(doc, Serial);
-    Serial.println("\n************************************");
+    
+    // Parse blue array
+    JsonArray blue = doc["blue"];
+    blueCount = 0;
+    for (int val : blue) {
+      if (blueCount < 50) blueTimings[blueCount++] = val;
+    }
+    
+    // Release mutex
+    xSemaphoreGive(timingMutex);
+    
+    Serial.println("New timing pattern received!");
+    Serial.printf("R: %d, G: %d, B: %d timings\n", redCount, greenCount, blueCount);
   }
 }
 
-// ============================================
-// Check for Sync
-// ============================================
-void checkSync() {
-  if (!buttonPressed) return;
+// Red LED task
+void RedTask(void* param) {
+  pinMode(LED_R, OUTPUT);
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  int idx = 0;
+  bool state = true;
+  int localCount = 0;
+  int localTimings[50];
   
-  if (windowOpen) {
-    // SUCCESS!
-    long diff = (long)(buttonPressTime - windowOpenTime);
-    
-    StaticJsonDocument<128> doc;
-    doc["status"] = "synced";
-    doc["timestamp_ms"] = buttonPressTime;
-    
-    char buffer[128];
-    serializeJson(doc, buffer);
-    
-    if (mqtt.publish(RESPONSE_TOPIC, buffer)) {
-      syncCount++;
-      
-      // Flash GREEN
-      setRGB(false, true, false);
-      Serial.printf("\n[SYNC] SUCCESS #%d! Offset: %ld ms\n", syncCount, diff);
-      Serial.printf("[TX] %s: %s\n", RESPONSE_TOPIC, buffer);
-      delay(200);
-      setRGB(false, false, true);  // Back to blue
-      
-      if (syncCount >= 3) {
-        Serial.println("\n*** 3 SYNCS DONE! Waiting for Task 4 code... ***\n");
-        // Keep green on
-        setRGB(false, true, false);
+  for (;;) {
+    // Safely copy data with mutex
+    if (xSemaphoreTake(timingMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      localCount = redCount;
+      if (localCount > 0) {
+        memcpy(localTimings, redTimings, localCount * sizeof(int));
+        // Clamp index to prevent stale data access
+        if (idx >= localCount) idx = 0;
       }
+      xSemaphoreGive(timingMutex);
     }
-  } else {
-    Serial.printf("[MISS] Window not open!\n");
-    // Flash red twice
-    for (int i = 0; i < 2; i++) {
-      setRGB(true, false, false);
-      delay(100);
-      setRGB(false, false, false);
-      delay(100);
-    }
-    setRGB(true, false, false);
-  }
-  
-  buttonPressed = false;
-}
-
-// ============================================
-// Pulse Red LED when idle
-// ============================================
-void pulseIdle() {
-  if (!windowOpen && millis() - lastPulse >= 500) {
-    pulseState = !pulseState;
-    digitalWrite(LED_RED, pulseState ? LED_ON : LED_OFF);
-    lastPulse = millis();
-  }
-}
-
-// ============================================
-// Connect MQTT
-// ============================================
-void connectMQTT() {
-  while (!mqtt.connected()) {
-    Serial.print("[MQTT] Connecting...");
-    String clientId = String(TEAM_ID) + "_task3";
     
-    if (mqtt.connect(clientId.c_str())) {
-      Serial.println(" OK!");
-      
-      mqtt.subscribe(WINDOW_TOPIC);
-      mqtt.subscribe(TEAM_ID);
-      
-      Serial.printf("[SUB] %s\n", WINDOW_TOPIC);
-      Serial.printf("[SUB] %s\n", TEAM_ID);
+    if (localCount > 0) {
+      digitalWrite(LED_R, state ? HIGH : LOW);
+      vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(localTimings[idx]));
+      state = !state;
+      idx = (idx + 1) % localCount;
     } else {
-      Serial.printf(" FAIL (rc=%d)\n", mqtt.state());
+      digitalWrite(LED_R, LOW);
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+  }
+}
+
+// Green LED task
+void GreenTask(void* param) {
+  pinMode(LED_G, OUTPUT);
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  int idx = 0;
+  bool state = true;
+  int localCount = 0;
+  int localTimings[50];
+  
+  for (;;) {
+    if (xSemaphoreTake(timingMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      localCount = greenCount;
+      if (localCount > 0) {
+        memcpy(localTimings, greenTimings, localCount * sizeof(int));
+        // Clamp index to prevent stale data access
+        if (idx >= localCount) idx = 0;
+      }
+      xSemaphoreGive(timingMutex);
+    }
+    
+    if (localCount > 0) {
+      digitalWrite(LED_G, state ? HIGH : LOW);
+      vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(localTimings[idx]));
+      state = !state;
+      idx = (idx + 1) % localCount;
+    } else {
+      digitalWrite(LED_G, LOW);
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+  }
+}
+
+// Blue LED task
+void BlueTask(void* param) {
+  pinMode(LED_B, OUTPUT);
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  int idx = 0;
+  bool state = true;
+  int localCount = 0;
+  int localTimings[50];
+  
+  for (;;) {
+    if (xSemaphoreTake(timingMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      localCount = blueCount;
+      if (localCount > 0) {
+        memcpy(localTimings, blueTimings, localCount * sizeof(int));
+        // Clamp index to prevent stale data access
+        if (idx >= localCount) idx = 0;
+      }
+      xSemaphoreGive(timingMutex);
+    }
+    
+    if (localCount > 0) {
+      digitalWrite(LED_B, state ? HIGH : LOW);
+      vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(localTimings[idx]));
+      state = !state;
+      idx = (idx + 1) % localCount;
+    } else {
+      digitalWrite(LED_B, LOW);
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+  }
+}
+
+// MQTT reconnect
+void reconnect() {
+  while (!mqtt.connected()) {
+    Serial.print("Connecting MQTT...");
+    if (mqtt.connect(TEAM_ID)) {
+      Serial.println("connected!");
+      mqtt.subscribe("shrimphub/led/timing/set");
+      Serial.println("Subscribed to: shrimphub/led/timing/set");
+    } else {
+      Serial.printf("failed, rc=%d\n", mqtt.state());
       delay(2000);
     }
   }
 }
 
-// ============================================
-// Setup
-// ============================================
 void setup() {
   Serial.begin(115200);
-  delay(100);
   
-  Serial.println("\n========================================");
-  Serial.println("     TASK 3: WINDOW SYNCHRONIZER");
-  Serial.println("========================================");
-  Serial.printf("Red: GPIO %d, Green: GPIO %d, Blue: GPIO %d\n", LED_RED, LED_GREEN, LED_BLUE);
-  Serial.printf("Button: GPIO %d\n", BUTTON_PIN);
-  Serial.println("========================================");
+  // Create mutex BEFORE tasks
+  timingMutex = xSemaphoreCreateMutex();
+  if (timingMutex == NULL) {
+    Serial.println("Mutex creation failed!");
+    while(1);
+  }
   
-  // LED setup
-  pinMode(LED_RED, OUTPUT);
-  pinMode(LED_GREEN, OUTPUT);
-  pinMode(LED_BLUE, OUTPUT);
-  setRGB(true, false, false);  // Red on initially
-  
-  // Button setup
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
-  
-  // WiFi
-  Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
+  // Connect WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.printf("\n[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+  Serial.println("\nWiFi connected: " + WiFi.localIP().toString());
   
-  // Flash green for WiFi success
-  setRGB(false, true, false);
-  delay(300);
-  setRGB(true, false, false);
-  
-  // MQTT
+  // Setup MQTT
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
-  mqtt.setBufferSize(1024);
   
-  Serial.println("\n[READY] Press button when BLUE LED is ON!");
-  Serial.printf("[TOPIC] Window: %s\n", WINDOW_TOPIC);
-  Serial.printf("[TOPIC] Response: %s\n", RESPONSE_TOPIC);
-  Serial.println("========================================\n");
+  // Create LED tasks
+  xTaskCreate(RedTask, "Red", 2048, NULL, 1, &redTask);
+  xTaskCreate(GreenTask, "Green", 2048, NULL, 1, &greenTask);
+  xTaskCreate(BlueTask, "Blue", 2048, NULL, 1, &blueTask);
+  
+  Serial.println("Tasks created. Waiting for timing data...");
 }
 
-// ============================================
-// Loop
-// ============================================
 void loop() {
   if (!mqtt.connected()) {
-    connectMQTT();
+    reconnect();
   }
   mqtt.loop();
-  
-  checkSync();
-  pulseIdle();
 }
