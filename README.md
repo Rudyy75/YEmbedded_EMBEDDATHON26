@@ -1,7 +1,11 @@
+<div align="center">
+
 # 🦐 The ShrimpHub Challenge: A Journey of Decryption
 ## Detailed Process Documentation
-**Team:** aniruddhyembedded (Reef ID: aniruddhyelluriyembedded)
+**Team:** YEmbedded (Reef ID: aniruddhyelluriyembedded)
 **Date:** January 11, 2026
+
+</div>
 
 ---
 
@@ -141,3 +145,9 @@ The ShrimpHub challenge forced us to span the entire embedded spectrum:
 - **Networked Rendering** (Task 6)
 
 We successfully navigated all challenges through iterative testing, robust engineering, and a bit of shrimp-themed perseverance. 🦐
+
+---
+
+<div align="center">
+Project submitted for the Embedathon '26 hackathon
+</div>
